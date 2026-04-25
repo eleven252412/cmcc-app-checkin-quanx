@@ -1,57 +1,71 @@
 /*
- * 中国移动 APP / 移动营业厅签到 Quantumult X 脚本
+ * 中国移动 APP / 移动营业厅每日签到 Quantumult X 脚本
  *
- * 设计原则：
- * 1. refreshSession 只用于刷新/验证会话，不假装它就是签到。
- * 2. 真正签到接口以抓到的“签到/领取/任务完成”请求为准，脚本每日重放该请求。
- * 3. 如果只抓到 refreshSession，定时任务会提示“还未抓到签到接口”，避免误报成功。
+ * 已验证主签到接口：
+ * POST https://wx.10086.cn/qwhdhub/api/mark/mark31/domark
+ * body: {"date":"YYYYMMDD"}
  *
- * 环境：Quantumult X
+ * 工作方式：
+ * 1) 抓包模式：在移动营业厅签到页/接口请求中保存 wx.10086.cn 的 QWHD 会话。
+ * 2) 定时模式：读取本地会话，自动调用 domark 签到，再查询 markstatus 确认。
+ *
+ * 公开版不包含任何 Cookie / token。
  */
 
 const CONFIG = {
-  name: '中国移动APP签到',
-  authKey: 'cmcc_app_checkin_auth_v1',
-  signKey: 'cmcc_app_checkin_sign_req_v1',
-  markStatusKey: 'cmcc_app_checkin_markstatus_req_v1',
-  businessPrizesKey: 'cmcc_app_checkin_business_prizes_req_v1',
-  resultKey: 'cmcc_app_checkin_last_result_v1',
-  notifyCooldownKey: 'cmcc_app_checkin_notify_ts_v1',
+  name: '移动营业厅签到',
+  sessionKey: 'cmcc_qwhd_mark_session_v2',
+  resultKey: 'cmcc_qwhd_mark_last_result_v2',
+  notifyCooldownKey: 'cmcc_qwhd_mark_capture_notify_ts_v2',
   notifyCooldownMs: 15000,
   timeout: 20000,
-  refreshPath: '/biz-orange/DN/refreshSession',
-  markStatusPath: '/qwhdhub/api/mark/mark31/markstatus',
-  businessPrizesPath: '/qwhdhub/api/mark/info/businessPrizes',
-  // 仅用于自动识别并保存“可能是真正签到/领取”的请求。
-  // 如果后续发现真实路径，可把正则再收窄。
-  signPathRegex: /(sign|signin|checkin|mark|qwhd|businessPrizes|draw|receive|reward|task|finish|complete|lottery|activity|coupon|point|score|rights|welfare|benefit|daily)/i,
-  requiredHostRegex: /(^|\.)10086\.cn$/i,
-  defaultUA: 'ChinaMobile/12.0.9 (iPhone; iOS 15.5; Scale/3.00)'
+  host: 'wx.10086.cn',
+  base: 'https://wx.10086.cn/qwhdhub/api/mark',
+  pagePathPrefix: '/qwhdhub/qwhdmark/',
+  apiPathPrefix: '/qwhdhub/api/mark/',
+  userInfoPath: '/user/info',
+  isMark31Path: '/mark31/isMark31',
+  domarkPath: '/mark31/domark',
+  markStatusPath: '/mark31/markstatus',
+  taskListPath: '/task/taskList',
+  defaultUA: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148/wkwebview leadeon/12.0.9/CMCCIT'
 };
 
-function now() { return Date.now(); }
 function safeJsonParse(s, fallback = null) { try { return JSON.parse(s); } catch (_) { return fallback; } }
 function readJSON(key, fallback = null) { return safeJsonParse($prefs.valueForKey(key) || '', fallback); }
 function writeJSON(key, obj) { return $prefs.setValueForKey(JSON.stringify(obj), key); }
 function getHeader(headers, name) {
   if (!headers) return undefined;
-  const lower = name.toLowerCase();
+  const lower = String(name).toLowerCase();
   for (const k of Object.keys(headers)) if (String(k).toLowerCase() === lower) return headers[k];
   return undefined;
 }
 function setHeader(headers, name, value) {
-  const lower = name.toLowerCase();
+  const lower = String(name).toLowerCase();
   for (const k of Object.keys(headers)) {
-    if (String(k).toLowerCase() === lower) {
-      headers[k] = value;
-      return;
-    }
+    if (String(k).toLowerCase() === lower) { headers[k] = value; return; }
   }
   headers[name] = value;
 }
 function deleteHeader(headers, name) {
-  const lower = name.toLowerCase();
+  const lower = String(name).toLowerCase();
   for (const k of Object.keys(headers)) if (String(k).toLowerCase() === lower) delete headers[k];
+}
+function notify(title, subtitle, message) { $notify(title, subtitle || '', message || ''); }
+function done(value = {}) { $done(value); }
+function shouldNotifyCapture() {
+  const now = Date.now();
+  const last = Number($prefs.valueForKey(CONFIG.notifyCooldownKey) || '0');
+  if (now - last < CONFIG.notifyCooldownMs) return false;
+  $prefs.setValueForKey(String(now), CONFIG.notifyCooldownKey);
+  return true;
+}
+function cleanText(text) {
+  return String(text || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 function normalizeSetCookie(raw) {
   if (!raw) return [];
@@ -66,13 +80,11 @@ function parseCookie(cookie) {
   });
   return map;
 }
-function stringifyCookie(map) {
-  return Array.from(map.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
-}
+function stringifyCookie(map) { return Array.from(map.entries()).map(([k, v]) => `${k}=${v}`).join('; '); }
 function mergeSetCookie(cookie, setCookie) {
   const jar = parseCookie(cookie);
   for (const line of normalizeSetCookie(setCookie)) {
-    const first = line.split(';')[0].trim();
+    const first = String(line || '').split(';')[0].trim();
     const idx = first.indexOf('=');
     if (idx <= 0) continue;
     const k = first.slice(0, idx).trim();
@@ -81,14 +93,17 @@ function mergeSetCookie(cookie, setCookie) {
   }
   return stringifyCookie(jar);
 }
+function keepUsefulCookie(cookie) {
+  const jar = parseCookie(cookie);
+  const keep = new Map();
+  for (const key of ['QWHD_SESSION_TOKEN', 'yx']) if (jar.has(key)) keep.set(key, jar.get(key));
+  // gdp cookie 非签到必需，但保留可以更贴近原请求；不影响公开安全，因为只存在 QuanX 本地。
+  for (const [k, v] of jar.entries()) if (/gdp|gio/i.test(k)) keep.set(k, v);
+  return stringifyCookie(keep);
+}
 function sanitizeHeaders(headers) {
   const out = {};
-  const keep = [
-    'accept', 'accept-language', 'content-type', 'user-agent',
-    'x-qen', 'xs', 'x-sign', 'x-nonce', 'x-token', 'x-time',
-    'x-request-id', 'x-timestamp', 'x-client-id', 'x-app-version',
-    'channel', 'authorization', 'referer', 'origin'
-  ];
+  const keep = ['accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin', 'login-check', 'x-requested-with'];
   for (const [k, v] of Object.entries(headers || {})) {
     const lk = k.toLowerCase();
     if (keep.includes(lk) || lk.startsWith('x-')) out[k] = v;
@@ -96,200 +111,170 @@ function sanitizeHeaders(headers) {
   deleteHeader(out, 'host');
   deleteHeader(out, 'content-length');
   deleteHeader(out, 'accept-encoding');
-  if (!getHeader(out, 'user-agent')) out['User-Agent'] = CONFIG.defaultUA;
+  if (!getHeader(out, 'User-Agent')) out['User-Agent'] = CONFIG.defaultUA;
+  if (!getHeader(out, 'Accept')) out['Accept'] = '*/*';
+  if (!getHeader(out, 'Content-Type')) out['Content-Type'] = 'application/json;charset=UTF-8';
+  if (!getHeader(out, 'Origin')) out['Origin'] = 'https://wx.10086.cn';
+  if (!getHeader(out, 'login-check')) out['login-check'] = '1';
+  if (!getHeader(out, 'x-requested-with')) out['x-requested-with'] = 'XMLHttpRequest';
   return out;
 }
-function requestInfo(req) {
-  const u = new URL(req.url);
-  return {
-    url: req.url,
-    method: req.method || 'GET',
-    host: u.host,
-    path: u.pathname,
-    headers: sanitizeHeaders(req.headers || {}),
-    cookie: getHeader(req.headers || {}, 'Cookie') || '',
-    body: req.body || '',
-    savedAt: new Date().toISOString()
-  };
+function todayYYYYMMDD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}${m}${day}`;
 }
-function shouldNotify() {
-  const last = Number($prefs.valueForKey(CONFIG.notifyCooldownKey) || 0);
-  if (now() - last < CONFIG.notifyCooldownMs) return false;
-  $prefs.setValueForKey(String(now()), CONFIG.notifyCooldownKey);
-  return true;
-}
-function notify(title, subtitle, message) { $notify(title, subtitle || '', message || ''); }
-function done(value = {}) { $done(value); }
-
-function handleCapture() {
-  const req = $request;
-  const info = requestInfo(req);
-  const hostOK = CONFIG.requiredHostRegex.test(info.host);
-  if (!hostOK) return done({});
-
-  const isRefresh = info.host === 'client.app.coc.10086.cn' && info.path === CONFIG.refreshPath;
-  const isMarkStatus = info.host === 'wx.10086.cn' && info.path === CONFIG.markStatusPath;
-  const isBusinessPrizes = info.host === 'wx.10086.cn' && info.path === CONFIG.businessPrizesPath;
-  const maybeSign = !isRefresh && !isMarkStatus && !isBusinessPrizes && CONFIG.signPathRegex.test(info.path + '?' + (new URL(info.url).search || ''));
-
-  if (isRefresh) {
-    writeJSON(CONFIG.authKey, info);
-    if (shouldNotify()) notify('✅ 中国移动APP', '已保存 refreshSession 会话', `Host: ${info.host}\nPath: ${info.path}`);
-  } else if (isMarkStatus) {
-    writeJSON(CONFIG.markStatusKey, info);
-    if (shouldNotify()) notify('✅ 中国移动APP', '已保存签到状态接口 markstatus', `${info.method} ${info.path}`);
-  } else if (isBusinessPrizes) {
-    writeJSON(CONFIG.businessPrizesKey, info);
-    if (shouldNotify()) notify('✅ 中国移动APP', '已保存奖品查询接口 businessPrizes', `${info.method} ${info.path}`);
-  } else if (maybeSign) {
-    writeJSON(CONFIG.signKey, info);
-    if (shouldNotify()) notify('✅ 中国移动APP', '已保存疑似签到/领取接口', `${info.method} ${info.path}`);
-  }
-  return done({});
-}
-
-async function fetchWithState(saved, override = {}) {
-  const headers = Object.assign({}, saved.headers || {}, override.headers || {});
-  const cookie = override.cookie || saved.cookie || getHeader(headers, 'Cookie') || '';
-  if (cookie) setHeader(headers, 'Cookie', cookie);
-  deleteHeader(headers, 'content-length');
-  deleteHeader(headers, 'accept-encoding');
-  const opts = {
-    url: override.url || saved.url,
-    method: override.method || saved.method || 'GET',
-    headers,
-    body: Object.prototype.hasOwnProperty.call(override, 'body') ? override.body : (saved.body || ''),
-    timeout: CONFIG.timeout
-  };
-  const resp = await $task.fetch(opts);
-  const nextCookie = mergeSetCookie(cookie, getHeader(resp.headers || {}, 'set-cookie'));
-  return {
-    statusCode: resp.statusCode,
-    headers: resp.headers || {},
-    body: resp.body || '',
-    cookie: nextCookie
-  };
-}
-function extractShort(text) {
-  const raw = String(text || '');
-  const cleaned = raw.replace(/\s+/g, ' ').slice(0, 500);
+function buildUrl(path) { return CONFIG.base + path; }
+function extractShort(body) {
+  const raw = String(body || '');
   const obj = safeJsonParse(raw, null);
   if (obj) {
-    const fields = ['msg', 'message', 'desc', 'resultDesc', 'retMsg', 'returnMsg', 'rspDesc', 'code', 'retCode', 'resultCode'];
     const parts = [];
-    for (const f of fields) if (obj[f] !== undefined) parts.push(`${f}=${obj[f]}`);
-    if (parts.length) return parts.join('；');
+    for (const f of ['code', 'status', 'msg', 'success']) if (obj[f] !== undefined) parts.push(`${f}=${obj[f]}`);
+    return parts.join('；') || JSON.stringify(obj).slice(0, 300);
   }
-  return cleaned || '(空响应)';
+  return cleanText(raw).slice(0, 300) || '(空响应)';
 }
 function classify(body) {
   const text = String(body || '');
-  const obj = safeJsonParse(text, null);
   if (/^\s*<!DOCTYPE html|^\s*<html/i.test(text)) return 'html';
+  const obj = safeJsonParse(text, null);
   if (obj) {
-    const code = obj.retCode ?? obj.code ?? obj.resultCode ?? obj.status;
-    const msg = String(obj.retMsg ?? obj.msg ?? obj.message ?? obj.resultDesc ?? '');
-    if (/已签到|已经签到|重复|今日.*完成|already/i.test(msg)) return 'already';
-    if (code !== undefined) {
-      const c = String(code).toUpperCase();
-      if (['0', '0000', 'SUCCESS', 'OK'].includes(c)) return 'success';
-      if (c !== '200') return 'failed';
-    }
-    if (/成功|领取成功|签到成功|success/i.test(msg)) return 'success';
-    if (/失败|异常|错误|未登录|登录|失效|过期|token|鉴权|认证/i.test(msg)) return 'failed';
+    const code = String(obj.code ?? obj.retCode ?? obj.resultCode ?? '').toUpperCase();
+    const status = String(obj.status ?? '').toUpperCase();
+    const msg = String(obj.msg ?? obj.message ?? obj.retMsg ?? '');
+    if (status === 'HAVE_MARKED' || /已签到|已签|今日已签到|无法再次签到/.test(msg)) return 'already';
+    if (code === 'SUCCESS' || code === '0' || code === '0000') return 'success';
+    if (/登录|失效|过期|鉴权|认证|token/i.test(msg + status + code)) return 'invalid';
+    if (code || status || msg) return 'failed';
   }
-  if (/已签到|已经签到|重复|今日.*完成|already/i.test(text)) return 'already';
-  if (/成功|领取成功|签到成功|success|SUCCESS|0000|\"code\"\s*:\s*0/.test(text)) return 'success';
-  if (/未登录|登录|失效|过期|token|鉴权|认证|401|403/i.test(text)) return 'invalid';
+  if (/已签到|已签|无法再次签到/.test(text)) return 'already';
+  if (/SUCCESS|签到成功|领取成功|成功/.test(text)) return 'success';
+  if (/登录|失效|过期|鉴权|认证|token/i.test(text)) return 'invalid';
   return 'unknown';
 }
-
 function iconForStatus(status) {
   if (status === 'success' || status === 'already') return '✅';
   if (status === 'invalid' || status === 'failed') return '❌';
   return '⚠️';
 }
 
+function handleCapture() {
+  const req = $request;
+  const url = new URL(req.url || '');
+  if (url.host !== CONFIG.host) return done({});
+  const isQwhdPage = url.pathname.startsWith(CONFIG.pagePathPrefix);
+  const isMarkApi = url.pathname.startsWith(CONFIG.apiPathPrefix);
+  if (!isQwhdPage && !isMarkApi) return done({});
+
+  const rawCookie = getHeader(req.headers || {}, 'Cookie') || '';
+  const usefulCookie = keepUsefulCookie(rawCookie);
+  const referer = getHeader(req.headers || {}, 'Referer') || req.url || '';
+  const hasToken = usefulCookie.includes('QWHD_SESSION_TOKEN=') || /token=QWHDSSOD/i.test(referer);
+  if (!hasToken) return done({});
+
+  const session = {
+    savedAt: new Date().toISOString(),
+    sourcePath: url.pathname,
+    url: req.url,
+    method: req.method || 'GET',
+    headers: sanitizeHeaders(req.headers || {}),
+    cookie: usefulCookie || rawCookie,
+    referer
+  };
+  if (session.cookie) setHeader(session.headers, 'Cookie', session.cookie);
+  writeJSON(CONFIG.sessionKey, session);
+
+  if (shouldNotifyCapture()) {
+    notify('✅ 移动营业厅签到', '已保存 QWHD 会话', `Path: ${url.pathname}\n后续定时会调用 mark31/domark 签到`);
+  }
+  return done({});
+}
+
+async function fetchWithSession(session, path, bodyObj = {}) {
+  const headers = Object.assign({}, session.headers || {});
+  const cookie = session.cookie || getHeader(headers, 'Cookie') || '';
+  if (cookie) setHeader(headers, 'Cookie', cookie);
+  if (session.referer && !getHeader(headers, 'Referer')) setHeader(headers, 'Referer', session.referer);
+  deleteHeader(headers, 'content-length');
+  deleteHeader(headers, 'accept-encoding');
+  const resp = await $task.fetch({
+    url: buildUrl(path),
+    method: 'POST',
+    headers,
+    body: JSON.stringify(bodyObj || {}),
+    timeout: CONFIG.timeout
+  });
+  const nextCookie = mergeSetCookie(cookie, getHeader(resp.headers || {}, 'set-cookie'));
+  if (nextCookie) {
+    session.cookie = keepUsefulCookie(nextCookie);
+    setHeader(session.headers, 'Cookie', session.cookie);
+    writeJSON(CONFIG.sessionKey, session);
+  }
+  return { statusCode: resp.statusCode, headers: resp.headers || {}, body: resp.body || '' };
+}
+
+function parseUserLine(body) {
+  const obj = safeJsonParse(body, null);
+  const data = obj && obj.data || {};
+  if (!data.nickName && !data.activityId) return '';
+  return `账号：${data.nickName || '未知'}｜activityId：${data.activityId || '未知'}`;
+}
+function parseMarkLine(body) {
+  const obj = safeJsonParse(body, null);
+  const data = obj && obj.data || {};
+  const user = data.userinfo || {};
+  const today = todayYYYYMMDD();
+  const hit = Array.isArray(data.markstatus) ? data.markstatus.find(x => x.date === today) : null;
+  const parts = [];
+  if (hit) parts.push(`今日状态=${hit.status}`);
+  if (user.accumulateTimes !== undefined) parts.push(`累计=${user.accumulateTimes}`);
+  return parts.length ? parts.join('｜') : extractShort(body);
+}
+
 async function runTask() {
-  const auth = readJSON(CONFIG.authKey, null);
-  const sign = readJSON(CONFIG.signKey, null);
-  const markStatus = readJSON(CONFIG.markStatusKey, null);
-  const businessPrizes = readJSON(CONFIG.businessPrizesKey, null);
+  const session = readJSON(CONFIG.sessionKey, null);
+  if (!session || !session.cookie || !String(session.cookie).includes('QWHD_SESSION_TOKEN=')) {
+    notify('❌ 移动营业厅签到', '未抓到有效 QWHD 会话', '先在中国移动 APP 打开签到页，让 QuanX 抓到 wx.10086.cn/qwhdhub 的请求。');
+    return done();
+  }
+
   const lines = [];
-  let latestCookie = '';
-
-  if (!auth) {
-    notify('❌ 中国移动APP签到', '未抓到 refreshSession', '先打开中国移动APP，并触发 client.app.coc.10086.cn/biz-orange/DN/refreshSession');
-    return done();
-  }
-
   try {
-    const refreshResp = await fetchWithState(auth);
-    latestCookie = refreshResp.cookie || auth.cookie || '';
-    auth.cookie = latestCookie;
-    const newToken = getHeader(refreshResp.headers, 'x-token') || getHeader(refreshResp.headers, 'X-Token');
-    if (newToken) setHeader(auth.headers, 'x-token', newToken);
-    writeJSON(CONFIG.authKey, auth);
-    lines.push(`✅ refreshSession：HTTP ${refreshResp.statusCode}｜${extractShort(refreshResp.body)}`);
-  } catch (e) {
-    lines.push(`❌ refreshSession 失败：${e.message || e}`);
-    notify('❌ 中国移动APP签到', '会话刷新失败', lines.join('\n'));
-    return done();
-  }
-
-  if (markStatus) {
-    try {
-      // wx.10086.cn 的 QWHD_SESSION_TOKEN/jsessionid-cmcc 和 refreshSession 不同域，必须用当时保存的 wx cookie。
-      const resp = await fetchWithState(markStatus, { cookie: markStatus.cookie });
-      const cls = classify(resp.body);
-      lines.push(`${iconForStatus(cls)} markstatus：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
-    } catch (e) {
-      lines.push(`❌ markstatus 失败：${e.message || e}`);
-    }
-  }
-
-  if (businessPrizes) {
-    try {
-      // 同上，保持 wx.10086.cn 原始 Cookie，避免被 refreshSession 的跨域 Cookie 覆盖后返回 HTML 等待页。
-      const resp = await fetchWithState(businessPrizes, { cookie: businessPrizes.cookie });
-      const cls = classify(resp.body);
-      lines.push(`${iconForStatus(cls)} businessPrizes：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
-    } catch (e) {
-      lines.push(`❌ businessPrizes 失败：${e.message || e}`);
-    }
-  }
-
-  if (!sign) {
-    if (markStatus || businessPrizes) {
-      lines.push('⚠️ 已能查询签到状态/奖品接口，但还没抓到真正“点击签到/领取”的动作接口。');
-      lines.push('👉 如果页面显示可签到，请再手动点一次签到按钮，让脚本保存动作接口。');
-      writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), ok: false, status: 'query_only', lines });
-      notify('⚠️ 中国移动APP签到', '已完成状态查询，缺少动作接口', lines.join('\n'));
+    const userResp = await fetchWithSession(session, CONFIG.userInfoPath, {});
+    const userCls = classify(userResp.body);
+    lines.push(`${iconForStatus(userCls)} user/info：HTTP ${userResp.statusCode}｜${parseUserLine(userResp.body) || extractShort(userResp.body)}`);
+    if (userCls === 'invalid' || userCls === 'html') {
+      notify('❌ 移动营业厅签到', '登录态失效', lines.join('\n'));
       return done();
     }
-    lines.push('⚠️ 尚未抓到真正签到/领取接口；refreshSession 只证明会话可用，不等于签到成功。');
-    lines.push('👉 请手动进中国移动APP签到页点一次签到/领取，让脚本保存真实接口。');
-    writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), ok: false, lines });
-    notify('⚠️ 中国移动APP签到', '缺少签到接口', lines.join('\n'));
-    return done();
+  } catch (e) {
+    lines.push(`❌ user/info 失败：${e.message || e}`);
+  }
+
+  const date = todayYYYYMMDD();
+  try {
+    const signResp = await fetchWithSession(session, CONFIG.domarkPath, { date });
+    const cls = classify(signResp.body);
+    lines.push(`${iconForStatus(cls)} domark：${date}｜HTTP ${signResp.statusCode}｜${extractShort(signResp.body)}`);
+  } catch (e) {
+    lines.push(`❌ domark 失败：${e.message || e}`);
   }
 
   try {
-    const signHeaders = Object.assign({}, sign.headers || {});
-    const token = getHeader(auth.headers, 'x-token');
-    if (token && new URL(sign.url).host === new URL(auth.url).host) setHeader(signHeaders, 'x-token', token);
-    // 动作接口也优先用自己抓到的同域 Cookie，避免 refreshSession 跨域 Cookie 覆盖 wx.10086.cn 会话。
-    const signResp = await fetchWithState(sign, { headers: signHeaders, cookie: sign.cookie });
-    const cls = classify(signResp.body);
-    const icon = iconForStatus(cls);
-    lines.push(`${icon} 签到接口：HTTP ${signResp.statusCode}｜${extractShort(signResp.body)}`);
-    writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), ok: cls === 'success' || cls === 'already', status: cls, lines });
-    notify(`${icon} 中国移动APP签到`, cls === 'success' ? '签到/领取成功' : cls === 'already' ? '今日已完成' : cls === 'invalid' ? '登录失效' : '结果需确认', lines.join('\n'));
+    const statusResp = await fetchWithSession(session, CONFIG.markStatusPath, {});
+    const statusCls = classify(statusResp.body);
+    lines.push(`${iconForStatus(statusCls)} markstatus：HTTP ${statusResp.statusCode}｜${parseMarkLine(statusResp.body)}`);
   } catch (e) {
-    lines.push(`❌ 签到接口失败：${e.message || e}`);
-    writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), ok: false, lines });
-    notify('❌ 中国移动APP签到', '执行失败', lines.join('\n'));
+    lines.push(`⚠️ markstatus 失败：${e.message || e}`);
   }
+
+  const body = lines.join('\n');
+  writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), lines });
+  const ok = lines.some(x => x.includes('domark') && (x.includes('code=SUCCESS') || x.includes('HAVE_MARKED') || x.includes('已签到') || x.includes('无法再次签到')));
+  notify(ok ? '✅ 移动营业厅签到' : '⚠️ 移动营业厅签到', ok ? '已执行/今日已签' : '结果需确认', body);
   return done();
 }
 
@@ -297,7 +282,7 @@ if (typeof $request !== 'undefined') {
   handleCapture();
 } else {
   runTask().catch(e => {
-    notify('❌ 中国移动APP签到', '脚本异常', String(e && e.stack || e));
+    notify('❌ 移动营业厅签到', '脚本异常', String(e && e.stack || e));
     done();
   });
 }

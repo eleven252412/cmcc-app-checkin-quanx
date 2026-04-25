@@ -1,137 +1,50 @@
 # 中国移动 APP / 移动营业厅签到 Quantumult X 脚本
 
-## ✅ 当前结论
+## 当前结论
 
-老板给的这条抓包：
+已从移动营业厅 `qwhdmark` 前端确认真实日历签到接口：
 
-```text
-POST /biz-orange/DN/refreshSession
-Host: client.app.coc.10086.cn
-Cookie: JSESSIONID=...; UID=...
-x-token: ...
-x-sign / x-nonce / x-time / xs: ...
+```http
+POST https://wx.10086.cn/qwhdhub/api/mark/mark31/domark
+Content-Type: application/json;charset=UTF-8
+
+{"date":"YYYYMMDD"}
 ```
 
-**有用，但它更像“刷新/验证会话”的接口，不一定是真正签到接口。**
+已实测：
 
-所以这个脚本做成两段式：
-
-1. ✅ 先抓 `refreshSession`，保存 cookie、x-token、x-sign、xs 等会话头
-2. ✅ 再自动保存你手动点击签到/领取时出现的真实接口
-3. ⏰ 定时执行时：先刷新会话，再重放真实签到接口
-
-如果只抓到了 `refreshSession`，脚本不会误报签到成功，会提示：
-
-```text
-⚠️ 尚未抓到真正签到/领取接口
+```json
+{"date":"20260426"}
 ```
+
+返回：
+
+```json
+{"status":"HAVE_MARKED","msg":"今日已签到过，无法再次签到"}
+```
+
+说明接口正确，只是当天已经签过。
 
 ## 文件
 
 - 脚本：`cmcc-app-checkin-quanx.js`
 - 导入配置：`quanx-import.conf`
 
-## Quantumult X 使用方式
+## 工作方式
 
-### 1. 添加重写
+1. 抓包模式：打开中国移动 APP 的签到/心愿金页面，脚本从 `wx.10086.cn/qwhdhub` 请求里保存：
+   - `QWHD_SESSION_TOKEN`
+   - `yx`
+   - `Referer` 里的活动 token
+   - 必要请求头
+2. 定时模式：每天自动执行：
+   - `user/info` 验证登录态
+   - `mark31/domark` 执行签到
+   - `mark31/markstatus` 复查今日状态
 
-把 `quanx-import.conf` 里的 `[rewrite_local]` 和 `[task_local]` 导入 Quantumult X。
+## 一键导入
 
-### 2. MITM hostname
-
-需要 MITM：
-
-```text
-client.app.coc.10086.cn
-*.10086.cn
-```
-
-### 3. 抓 refreshSession
-
-打开 Quantumult X 重写和 MITM 后：
-
-1. 打开中国移动 APP
-2. 进入首页 / 我的 / 权益 / 签到相关页面
-3. 等待出现 `client.app.coc.10086.cn/biz-orange/DN/refreshSession`
-4. 脚本提示：
-
-```text
-✅ 中国移动APP
-已保存 refreshSession 会话
-```
-
-### 4. 抓已验证的 `wx.10086.cn` 两个接口
-
-你提供的这两个接口我已从服务器侧试过：
-
-- ✅ `POST /qwhdhub/api/mark/mark31/markstatus`：返回 `code=SUCCESS`，能查到签到状态/累计任务信息
-- ✅ `POST /qwhdhub/api/mark/info/businessPrizes`：返回 `code=SUCCESS`，能查奖品信息，目前响应 `data=[]`
-
-脚本已单独保存这两个接口。定时运行时会先执行它们，用来确认页面状态。
-
-⚠️ 但这两个更像“状态查询/奖品查询”，还不一定是“点击签到动作接口”。如果通知显示：
-
-```text
-⚠️ 已完成状态查询，缺少动作接口
-```
-
-说明还需要你在页面上真正点一次“签到/领取”，让脚本抓到动作接口。
-
-### 5. 抓真正签到接口
-
-继续在 APP 里手动点一次：
-
-- 签到
-- 领取
-- 做任务
-- 福利 / 权益相关领取按钮
-
-脚本会自动保存路径里包含这些关键词的请求：
-
-```text
-sign / signin / checkin / draw / receive / reward / task / finish / complete / lottery / activity / coupon / point / score / rights / welfare / benefit / daily
-```
-
-看到提示：
-
-```text
-✅ 已保存疑似签到/领取接口
-```
-
-就说明后续定时可以重放。
-
-## 定时
-
-默认每天 08:30 执行：
-
-```text
-30 8 * * *
-```
-
-## 结果判断
-
-通知状态：
-
-- ✅ `refreshSession` 成功：只代表会话可用
-- ✅ `markstatus` 成功：代表签到状态接口可查询
-- ✅ `businessPrizes` 成功：代表奖品接口可查询
-- ✅ 签到接口返回“成功/已签到”：任务完成
-- ⚠️ 只抓到状态/奖品接口：可以查询，但还缺少真正点击签到/领取的动作接口
-- ⚠️ 没抓到签到接口：需要手动点一次签到让脚本保存真实接口
-- ❌ token/cookie 失效：重新抓包
-
-## ⚠️ 注意
-
-- `wx.10086.cn` 的 `QWHD_SESSION_TOKEN/jsessionid-cmcc` 和 `client.app.coc.10086.cn` 的 `refreshSession` 是不同域会话，脚本现在会分别使用各自抓包保存的 Cookie，避免互相覆盖后返回 HTML 等待页。
-- 如果 `markstatus/businessPrizes` 返回 HTML，而不是 JSON，脚本会标成 `⚠️`，不再误标 `✅`。
-- `x-sign` / `x-time` / `x-nonce` 可能是动态签名。如果真实签到接口强校验动态签名，单纯重放可能失败。
-- 这个脚本会明确显示失败原因，不会把 `refreshSession` 成功误报成签到成功。
-- 老板给的 `refreshSession` 抓包里有 `x-token + Cookie`，目前足够做会话保存和刷新测试；真正能不能签到，要看后续抓到的签到接口是否允许重放。
-
-
-## 直接导入链接
-
-QuanX 配置：
+原始配置文件：
 
 ```text
 https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/quanx-import.conf
@@ -142,3 +55,50 @@ https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/quanx
 ```text
 https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
 ```
+
+真正一键导入：
+
+```text
+quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent.com%2Feleven252412%2Fcmcc-app-checkin-quanx%2Fmain%2Fquanx-import.conf&tag=%E7%A7%BB%E5%8A%A8%E8%90%A5%E4%B8%9A%E5%8E%85%E7%AD%BE%E5%88%B0&img-url=https%3A%2F%2Fraw.githubusercontent.com%2Fgithub%2Fexplore%2Fmain%2Ftopics%2Fquantumult-x%2Fquantumult-x.png
+```
+
+## QuanX 配置
+
+```ini
+[rewrite_local]
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
+
+[task_local]
+30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js, tag=移动营业厅签到, enabled=true
+
+[mitm]
+hostname = wx.10086.cn
+```
+
+## 首次使用
+
+1. 导入配置。
+2. 打开 QuanX 重写和 MITM。
+3. 打开中国移动 APP。
+4. 进入签到 / 心愿金 / 任务页面。
+5. 看到通知：
+
+```text
+✅ 移动营业厅签到 / 已保存 QWHD 会话
+```
+
+之后定时任务即可自动执行。
+
+## 通知说明
+
+- ✅ `user/info`：登录态有效
+- ✅ `domark`：签到成功或今日已签
+- ✅ `markstatus`：复查签到状态成功
+- ❌ 登录态失效：重新打开 APP 签到页抓会话
+- ⚠️ 结果需确认：接口返回未知状态，需查看通知详情
+
+## 注意
+
+- 公开版不包含任何 Cookie / token。
+- 这个脚本只做移动营业厅 `wx.10086.cn/qwhdhub` 的日历签到，不处理云盘云朵脚本。
+- `QWHD_SESSION_TOKEN` 可能会过期；过期时重新打开中国移动 APP 签到页即可刷新。
