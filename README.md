@@ -122,6 +122,8 @@ sign / signin / checkin / draw / receive / reward / task / finish / complete / l
 
 ## ⚠️ 注意
 
+- `wx.10086.cn` 的 `QWHD_SESSION_TOKEN/jsessionid-cmcc` 和 `client.app.coc.10086.cn` 的 `refreshSession` 是不同域会话，脚本现在会分别使用各自抓包保存的 Cookie，避免互相覆盖后返回 HTML 等待页。
+- 如果 `markstatus/businessPrizes` 返回 HTML，而不是 JSON，脚本会标成 `⚠️`，不再误标 `✅`。
 - `x-sign` / `x-time` / `x-nonce` 可能是动态签名。如果真实签到接口强校验动态签名，单纯重放可能失败。
 - 这个脚本会明确显示失败原因，不会把 `refreshSession` 成功误报成签到成功。
 - 老板给的 `refreshSession` 抓包里有 `x-token + Cookie`，目前足够做会话保存和刷新测试；真正能不能签到，要看后续抓到的签到接口是否允许重放。

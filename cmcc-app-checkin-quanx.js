@@ -184,10 +184,30 @@ function extractShort(text) {
 }
 function classify(body) {
   const text = String(body || '');
+  const obj = safeJsonParse(text, null);
+  if (/^\s*<!DOCTYPE html|^\s*<html/i.test(text)) return 'html';
+  if (obj) {
+    const code = obj.retCode ?? obj.code ?? obj.resultCode ?? obj.status;
+    const msg = String(obj.retMsg ?? obj.msg ?? obj.message ?? obj.resultDesc ?? '');
+    if (/已签到|已经签到|重复|今日.*完成|already/i.test(msg)) return 'already';
+    if (code !== undefined) {
+      const c = String(code).toUpperCase();
+      if (['0', '0000', 'SUCCESS', 'OK'].includes(c)) return 'success';
+      if (c !== '200') return 'failed';
+    }
+    if (/成功|领取成功|签到成功|success/i.test(msg)) return 'success';
+    if (/失败|异常|错误|未登录|登录|失效|过期|token|鉴权|认证/i.test(msg)) return 'failed';
+  }
   if (/已签到|已经签到|重复|今日.*完成|already/i.test(text)) return 'already';
-  if (/成功|领取成功|签到成功|success|SUCCESS|0000|"code"\s*:\s*0/.test(text)) return 'success';
+  if (/成功|领取成功|签到成功|success|SUCCESS|0000|\"code\"\s*:\s*0/.test(text)) return 'success';
   if (/未登录|登录|失效|过期|token|鉴权|认证|401|403/i.test(text)) return 'invalid';
   return 'unknown';
+}
+
+function iconForStatus(status) {
+  if (status === 'success' || status === 'already') return '✅';
+  if (status === 'invalid' || status === 'failed') return '❌';
+  return '⚠️';
 }
 
 async function runTask() {
@@ -219,9 +239,10 @@ async function runTask() {
 
   if (markStatus) {
     try {
-      const resp = await fetchWithState(markStatus, { cookie: latestCookie || markStatus.cookie });
-      lines.push(`✅ markstatus：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
-      latestCookie = resp.cookie || latestCookie;
+      // wx.10086.cn 的 QWHD_SESSION_TOKEN/jsessionid-cmcc 和 refreshSession 不同域，必须用当时保存的 wx cookie。
+      const resp = await fetchWithState(markStatus, { cookie: markStatus.cookie });
+      const cls = classify(resp.body);
+      lines.push(`${iconForStatus(cls)} markstatus：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
     } catch (e) {
       lines.push(`❌ markstatus 失败：${e.message || e}`);
     }
@@ -229,9 +250,10 @@ async function runTask() {
 
   if (businessPrizes) {
     try {
-      const resp = await fetchWithState(businessPrizes, { cookie: latestCookie || businessPrizes.cookie });
-      lines.push(`✅ businessPrizes：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
-      latestCookie = resp.cookie || latestCookie;
+      // 同上，保持 wx.10086.cn 原始 Cookie，避免被 refreshSession 的跨域 Cookie 覆盖后返回 HTML 等待页。
+      const resp = await fetchWithState(businessPrizes, { cookie: businessPrizes.cookie });
+      const cls = classify(resp.body);
+      lines.push(`${iconForStatus(cls)} businessPrizes：HTTP ${resp.statusCode}｜${extractShort(resp.body)}`);
     } catch (e) {
       lines.push(`❌ businessPrizes 失败：${e.message || e}`);
     }
@@ -255,10 +277,11 @@ async function runTask() {
   try {
     const signHeaders = Object.assign({}, sign.headers || {});
     const token = getHeader(auth.headers, 'x-token');
-    if (token) setHeader(signHeaders, 'x-token', token);
-    const signResp = await fetchWithState(sign, { headers: signHeaders, cookie: latestCookie || sign.cookie });
+    if (token && new URL(sign.url).host === new URL(auth.url).host) setHeader(signHeaders, 'x-token', token);
+    // 动作接口也优先用自己抓到的同域 Cookie，避免 refreshSession 跨域 Cookie 覆盖 wx.10086.cn 会话。
+    const signResp = await fetchWithState(sign, { headers: signHeaders, cookie: sign.cookie });
     const cls = classify(signResp.body);
-    const icon = cls === 'success' ? '✅' : cls === 'already' ? '✅' : cls === 'invalid' ? '❌' : '⚠️';
+    const icon = iconForStatus(cls);
     lines.push(`${icon} 签到接口：HTTP ${signResp.statusCode}｜${extractShort(signResp.body)}`);
     writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), ok: cls === 'success' || cls === 'already', status: cls, lines });
     notify(`${icon} 中国移动APP签到`, cls === 'success' ? '签到/领取成功' : cls === 'already' ? '今日已完成' : cls === 'invalid' ? '登录失效' : '结果需确认', lines.join('\n'));
