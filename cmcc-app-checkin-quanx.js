@@ -234,6 +234,10 @@ function parseMarkLine(body) {
   return parts.length ? parts.join('｜') : extractShort(body);
 }
 
+function buildMinimalSuccessText() {
+  return '签到成功 | 今日获取未知积分 | 总积分未知';
+}
+
 async function runTask() {
   const session = readJSON(CONFIG.sessionKey, null);
   if (!session || !session.cookie || !String(session.cookie).includes('QWHD_SESSION_TOKEN=')) {
@@ -274,7 +278,7 @@ async function runTask() {
   const body = lines.join('\n');
   writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), lines });
   const ok = lines.some(x => x.includes('domark') && (x.includes('code=SUCCESS') || x.includes('HAVE_MARKED') || x.includes('已签到') || x.includes('无法再次签到')));
-  notify(ok ? '✅ 移动营业厅签到' : '⚠️ 移动营业厅签到', ok ? '已执行/今日已签' : '结果需确认', body);
+  notify(ok ? '✅ 移动营业厅签到' : '⚠️ 移动营业厅签到', ok ? '签到成功' : '结果需确认', ok ? buildMinimalSuccessText() : body);
   return done();
 }
 
