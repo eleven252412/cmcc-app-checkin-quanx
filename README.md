@@ -35,9 +35,12 @@ Content-Type: application/json;charset=UTF-8
 1. 抓包模式：打开中国移动 APP 的签到/心愿金页面，脚本从 `wx.10086.cn/qwhdhub` 请求里保存：
    - `QWHD_SESSION_TOKEN`
    - `yx`
+   - `jsessionid-cmcc` / `JSESSIONID` 等同域会话辅助 Cookie
    - `Referer` 里的活动 token
    - 必要请求头
+   - 最近 10 次 Cookie 快照摘要（只存名称、长度、短 hash，不存明文到通知里），方便对比今天/昨天变化
 2. 定时模式：每天自动执行：
+   - 先访问已保存的 `qwhdmark` 页面，尝试用页面 token 刷新 `QWHD_SESSION_TOKEN`
    - `user/info` 验证登录态
    - `mark31/domark` 执行签到
    - `mark31/markstatus` 复查今日状态
@@ -93,7 +96,8 @@ hostname = wx.10086.cn
 
 - 成功/已签：`移动营业厅签到 / 签到成功 / 签到成功 | 今日获取未知积分 | 总积分未知`
 - 移动营业厅当前接口只稳定返回签到状态，未确认积分字段，所以积分暂显示未知
-- ❌ 登录态失效：重新打开 APP 签到页抓会话
+- 抓包保存时会显示 `Cookie对比：变化/新增/消失`，用于看今天和昨天具体哪些 Cookie 变了
+- ❌ 登录态失效：脚本会先自动尝试页面会话刷新；仍失败时再重新打开 APP 签到页抓会话
 - ⚠️ 结果需确认：接口返回未知状态，需查看通知详情
 - 签到失败、登录失效、接口异常时才保留详细诊断信息
 
@@ -101,4 +105,5 @@ hostname = wx.10086.cn
 
 - 公开版不包含任何 Cookie / token。
 - 这个脚本只做移动营业厅 `wx.10086.cn/qwhdhub` 的日历签到，不处理云盘云朵脚本。
-- `QWHD_SESSION_TOKEN` 可能会过期；过期时重新打开中国移动 APP 签到页即可刷新。
+- 已保留 `jsessionid-cmcc` / `JSESSIONID` 等同域辅助 Cookie，并在定时前先刷新活动页会话，尽量避免 `QWHD_SESSION_TOKEN` 每天轮换导致定时直接失效。
+- 如果页面 token 本身也被服务端吊销，仍需重新打开中国移动 APP 签到页刷新一次。

@@ -17,6 +17,7 @@ const CONFIG = {
   sessionKey: 'cmcc_qwhd_mark_session_v2',
   resultKey: 'cmcc_qwhd_mark_last_result_v2',
   notifyCooldownKey: 'cmcc_qwhd_mark_capture_notify_ts_v2',
+  sessionHistoryKey: 'cmcc_qwhd_mark_session_history_v2',
   notifyCooldownMs: 15000,
   timeout: 20000,
   host: 'wx.10086.cn',
@@ -96,8 +97,10 @@ function mergeSetCookie(cookie, setCookie) {
 function keepUsefulCookie(cookie) {
   const jar = parseCookie(cookie);
   const keep = new Map();
-  for (const key of ['QWHD_SESSION_TOKEN', 'yx']) if (jar.has(key)) keep.set(key, jar.get(key));
-  // gdp cookie 非签到必需，但保留可以更贴近原请求；不影响公开安全，因为只存在 QuanX 本地。
+  for (const key of ['QWHD_SESSION_TOKEN', 'yx', 'jsessionid-cmcc', 'JSESSIONID', 'CMCCSSO', 'CMCCSSOD']) {
+    if (jar.has(key)) keep.set(key, jar.get(key));
+  }
+  // gdp/gio cookie 非签到必需，但保留可以更贴近原请求；不影响公开安全，因为只存在 QuanX 本地。
   for (const [k, v] of jar.entries()) if (/gdp|gio/i.test(k)) keep.set(k, v);
   return stringifyCookie(keep);
 }
@@ -161,6 +164,77 @@ function iconForStatus(status) {
   return '⚠️';
 }
 
+function hashString(s) {
+  let h = 2166136261;
+  const text = String(s || '');
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+function cookieSnapshot(cookie) {
+  const jar = parseCookie(cookie);
+  const out = {};
+  for (const [k, v] of jar.entries()) out[k] = { len: String(v || '').length, hash: hashString(v).slice(0, 8) };
+  return out;
+}
+function cookieDiffSummary(prevCookie, nextCookie) {
+  const prev = parseCookie(prevCookie);
+  const next = parseCookie(nextCookie);
+  const prevNames = Array.from(prev.keys());
+  const nextNames = Array.from(next.keys());
+  const added = nextNames.filter(k => !prev.has(k));
+  const removed = prevNames.filter(k => !next.has(k));
+  const changed = nextNames.filter(k => prev.has(k) && hashString(prev.get(k)) !== hashString(next.get(k)));
+  const unchanged = nextNames.filter(k => prev.has(k) && hashString(prev.get(k)) === hashString(next.get(k)));
+  const parts = [];
+  if (changed.length) parts.push(`变化：${changed.join(', ')}`);
+  if (added.length) parts.push(`新增：${added.join(', ')}`);
+  if (removed.length) parts.push(`消失：${removed.join(', ')}`);
+  if (!parts.length && unchanged.length) parts.push(`未变：${unchanged.join(', ')}`);
+  return parts.join('；') || '无可比 cookie';
+}
+function saveSession(session, prevSession) {
+  const now = new Date().toISOString();
+  session.savedAt = now;
+  session.cookieSnapshot = cookieSnapshot(session.cookie || '');
+  session.cookieDiff = prevSession && prevSession.cookie ? cookieDiffSummary(prevSession.cookie, session.cookie || '') : '首次保存，无昨日对比';
+  writeJSON(CONFIG.sessionKey, session);
+  const history = readJSON(CONFIG.sessionHistoryKey, []);
+  history.unshift({ at: now, sourcePath: session.sourcePath, diff: session.cookieDiff, snapshot: session.cookieSnapshot });
+  writeJSON(CONFIG.sessionHistoryKey, history.slice(0, 10));
+  return session.cookieDiff;
+}
+function pickRefreshPageUrl(session) {
+  const candidates = [session && session.referer, session && session.url].filter(Boolean);
+  for (const item of candidates) {
+    try {
+      const u = new URL(item);
+      if (u.host === CONFIG.host && u.pathname.startsWith(CONFIG.pagePathPrefix) && /token=QWHDSSOD/i.test(u.search)) return u.toString();
+    } catch (_) {}
+  }
+  return '';
+}
+async function refreshPageSession(session) {
+  const url = pickRefreshPageUrl(session);
+  if (!url) return { ok: false, reason: '无可用 qwhdmark token 页面' };
+  const headers = Object.assign({}, session.headers || {});
+  const cookie = session.cookie || getHeader(headers, 'Cookie') || '';
+  if (cookie) setHeader(headers, 'Cookie', cookie);
+  deleteHeader(headers, 'content-length');
+  deleteHeader(headers, 'accept-encoding');
+  const resp = await $task.fetch({ url, method: 'GET', headers, timeout: CONFIG.timeout });
+  const nextCookie = mergeSetCookie(cookie, getHeader(resp.headers || {}, 'set-cookie'));
+  if (nextCookie) {
+    const prevCookie = session.cookie || '';
+    session.cookie = keepUsefulCookie(nextCookie);
+    setHeader(session.headers, 'Cookie', session.cookie);
+    saveSession(session, { cookie: prevCookie });
+  }
+  return { ok: true, statusCode: resp.statusCode, body: resp.body || '' };
+}
+
 function handleCapture() {
   const req = $request;
   const url = new URL(req.url || '');
@@ -175,8 +249,8 @@ function handleCapture() {
   const hasToken = usefulCookie.includes('QWHD_SESSION_TOKEN=') || /token=QWHDSSOD/i.test(referer);
   if (!hasToken) return done({});
 
+  const prevSession = readJSON(CONFIG.sessionKey, null);
   const session = {
-    savedAt: new Date().toISOString(),
     sourcePath: url.pathname,
     url: req.url,
     method: req.method || 'GET',
@@ -185,10 +259,10 @@ function handleCapture() {
     referer
   };
   if (session.cookie) setHeader(session.headers, 'Cookie', session.cookie);
-  writeJSON(CONFIG.sessionKey, session);
+  const diff = saveSession(session, prevSession);
 
   if (shouldNotifyCapture()) {
-    notify('✅ 移动营业厅签到', '已保存 QWHD 会话', `Path: ${url.pathname}\n后续定时会调用 mark31/domark 签到`);
+    notify('✅ 移动营业厅签到', '已保存 QWHD 会话', `Path: ${url.pathname}\nCookie对比：${diff}\n后续定时会先刷新页面会话，再调用 mark31/domark 签到`);
   }
   return done({});
 }
@@ -211,7 +285,7 @@ async function fetchWithSession(session, path, bodyObj = {}) {
   if (nextCookie) {
     session.cookie = keepUsefulCookie(nextCookie);
     setHeader(session.headers, 'Cookie', session.cookie);
-    writeJSON(CONFIG.sessionKey, session);
+    saveSession(session, { cookie });
   }
   return { statusCode: resp.statusCode, headers: resp.headers || {}, body: resp.body || '' };
 }
@@ -246,6 +320,13 @@ async function runTask() {
   }
 
   const lines = [];
+  try {
+    const refresh = await refreshPageSession(session);
+    if (refresh.ok) lines.push(`✅ page-refresh：HTTP ${refresh.statusCode}｜已尝试刷新 QWHD 会话`);
+  } catch (e) {
+    lines.push(`⚠️ page-refresh 失败：${e.message || e}`);
+  }
+
   try {
     const userResp = await fetchWithSession(session, CONFIG.userInfoPath, {});
     const userCls = classify(userResp.body);
