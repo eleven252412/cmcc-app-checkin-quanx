@@ -58,7 +58,7 @@ https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/quanx
 脚本 raw：
 
 ```text
-https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
+https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
 ```
 
 真正一键导入：
@@ -71,11 +71,11 @@ quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent
 
 ```ini
 [rewrite_local]
-^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
-^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-response-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-response-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
 
 [task_local]
-30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js, tag=移动营业厅签到, enabled=true
+30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount, tag=移动营业厅签到, enabled=true
 
 [mitm]
 hostname = wx.10086.cn
@@ -99,6 +99,7 @@ hostname = wx.10086.cn
 
 - 成功/已签：`移动营业厅签到 / 签到成功 / 签到成功 | 当月签到次数X`
 - 移动营业厅当前 `markstatus.userinfo.accumulateTimes` 实际表示当月累计签到次数，不是积分
+- 脚本链接已追加版本参数，用于避开 QuanX/Raw 缓存；如果仍显示旧文案，请删除旧资源后重新导入
 - 抓包保存时会显示 `Cookie对比：变化/新增/消失`，用于看今天和昨天具体哪些 Cookie 变了；若看到 `已刷新 QWHD 响应会话`，表示已保存响应 `Set-Cookie` 里的新会话
 - ❌ 登录态失效：脚本会先自动尝试页面会话刷新；仍失败时再重新打开 APP 签到页抓会话
 - ⚠️ 结果需确认：接口返回未知状态，需查看通知详情
