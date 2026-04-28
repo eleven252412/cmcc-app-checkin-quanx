@@ -104,6 +104,9 @@ function keepUsefulCookie(cookie) {
   for (const [k, v] of jar.entries()) if (/gdp|gio/i.test(k)) keep.set(k, v);
   return stringifyCookie(keep);
 }
+function hasUsefulToken(cookie, referer) {
+  return String(cookie || '').includes('QWHD_SESSION_TOKEN=') || /token=QWHDSSOD/i.test(String(referer || ''));
+}
 function sanitizeHeaders(headers) {
   const out = {};
   const keep = ['accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin', 'login-check', 'x-requested-with'];
@@ -246,7 +249,7 @@ function handleCapture() {
   const rawCookie = getHeader(req.headers || {}, 'Cookie') || '';
   const usefulCookie = keepUsefulCookie(rawCookie);
   const referer = getHeader(req.headers || {}, 'Referer') || req.url || '';
-  const hasToken = usefulCookie.includes('QWHD_SESSION_TOKEN=') || /token=QWHDSSOD/i.test(referer);
+  const hasToken = hasUsefulToken(usefulCookie, referer);
   if (!hasToken) return done({});
 
   const prevSession = readJSON(CONFIG.sessionKey, null);
@@ -263,6 +266,47 @@ function handleCapture() {
 
   if (shouldNotifyCapture()) {
     notify('✅ 移动营业厅签到', '已保存 QWHD 会话', `Path: ${url.pathname}\nCookie对比：${diff}\n后续定时会先刷新页面会话，再调用 mark31/domark 签到`);
+  }
+  return done({});
+
+}
+
+function handleResponseCapture() {
+  const req = $request;
+  const resp = $response;
+  const url = new URL(req.url || '');
+  if (url.host !== CONFIG.host) return done({});
+  const isQwhdPage = url.pathname.startsWith(CONFIG.pagePathPrefix);
+  const isMarkApi = url.pathname.startsWith(CONFIG.apiPathPrefix);
+  if (!isQwhdPage && !isMarkApi) return done({});
+
+  const setCookie = getHeader(resp.headers || {}, 'set-cookie');
+  if (!setCookie) return done({});
+  const reqCookie = keepUsefulCookie(getHeader(req.headers || {}, 'Cookie') || '');
+  const referer = getHeader(req.headers || {}, 'Referer') || req.url || '';
+  const prevSession = readJSON(CONFIG.sessionKey, null);
+  const baseCookie = prevSession && prevSession.cookie || reqCookie;
+  const mergedCookie = keepUsefulCookie(mergeSetCookie(baseCookie, setCookie));
+  if (!hasUsefulToken(mergedCookie, referer)) return done({});
+
+  const session = prevSession || {
+    sourcePath: url.pathname,
+    url: req.url,
+    method: req.method || 'GET',
+    headers: sanitizeHeaders(req.headers || {}),
+    referer
+  };
+  session.sourcePath = url.pathname;
+  session.url = req.url;
+  session.method = req.method || session.method || 'GET';
+  session.headers = sanitizeHeaders(Object.assign({}, session.headers || {}, req.headers || {}));
+  session.cookie = mergedCookie;
+  session.referer = referer || session.referer || req.url;
+  setHeader(session.headers, 'Cookie', session.cookie);
+  const diff = saveSession(session, { cookie: baseCookie || '' });
+
+  if (shouldNotifyCapture()) {
+    notify('✅ 移动营业厅签到', '已刷新 QWHD 响应会话', `Path: ${url.pathname}\nCookie对比：${diff}\n后续定时会使用响应 Set-Cookie 后的新会话签到`);
   }
   return done({});
 }
@@ -314,7 +358,7 @@ function buildMinimalSuccessText() {
 
 async function runTask() {
   const session = readJSON(CONFIG.sessionKey, null);
-  if (!session || !session.cookie || !String(session.cookie).includes('QWHD_SESSION_TOKEN=')) {
+  if (!session || !session.cookie || !hasUsefulToken(session.cookie, session.referer || session.url || '')) {
     notify('❌ 移动营业厅签到', '未抓到有效 QWHD 会话', '先在中国移动 APP 打开签到页，让 QuanX 抓到 wx.10086.cn/qwhdhub 的请求。');
     return done();
   }
@@ -363,7 +407,9 @@ async function runTask() {
   return done();
 }
 
-if (typeof $request !== 'undefined') {
+if (typeof $request !== 'undefined' && typeof $response !== 'undefined') {
+  handleResponseCapture();
+} else if (typeof $request !== 'undefined') {
   handleCapture();
 } else {
   runTask().catch(e => {

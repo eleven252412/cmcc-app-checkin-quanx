@@ -32,13 +32,14 @@ Content-Type: application/json;charset=UTF-8
 
 ## 工作方式
 
-1. 抓包模式：打开中国移动 APP 的签到/心愿金页面，脚本从 `wx.10086.cn/qwhdhub` 请求里保存：
+1. 抓包模式：打开中国移动 APP 的签到/心愿金页面，脚本从 `wx.10086.cn/qwhdhub` 请求与响应里保存：
    - `QWHD_SESSION_TOKEN`
    - `yx`
    - `jsessionid-cmcc` / `JSESSIONID` 等同域会话辅助 Cookie
    - `Referer` 里的活动 token
    - 必要请求头
    - 最近 10 次 Cookie 快照摘要（只存名称、长度、短 hash，不存明文到通知里），方便对比今天/昨天变化
+   - 响应头里的 `Set-Cookie`，用于保存服务端轮换后的最新 `QWHD_SESSION_TOKEN`
 2. 定时模式：每天自动执行：
    - 先访问已保存的 `qwhdmark` 页面，尝试用页面 token 刷新 `QWHD_SESSION_TOKEN`
    - `user/info` 验证登录态
@@ -70,6 +71,7 @@ quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent
 ```ini
 [rewrite_local]
 ^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-response-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js
 
 [task_local]
 30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js, tag=移动营业厅签到, enabled=true
@@ -96,7 +98,7 @@ hostname = wx.10086.cn
 
 - 成功/已签：`移动营业厅签到 / 签到成功 / 签到成功 | 今日获取未知积分 | 总积分未知`
 - 移动营业厅当前接口只稳定返回签到状态，未确认积分字段，所以积分暂显示未知
-- 抓包保存时会显示 `Cookie对比：变化/新增/消失`，用于看今天和昨天具体哪些 Cookie 变了
+- 抓包保存时会显示 `Cookie对比：变化/新增/消失`，用于看今天和昨天具体哪些 Cookie 变了；若看到 `已刷新 QWHD 响应会话`，表示已保存响应 `Set-Cookie` 里的新会话
 - ❌ 登录态失效：脚本会先自动尝试页面会话刷新；仍失败时再重新打开 APP 签到页抓会话
 - ⚠️ 结果需确认：接口返回未知状态，需查看通知详情
 - 签到失败、登录失效、接口异常时才保留详细诊断信息
