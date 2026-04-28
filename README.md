@@ -61,10 +61,10 @@ https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/quanx
 https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
 ```
 
-真正一键导入：
+真正一键导入（新版，避开旧缓存）：
 
 ```text
-quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent.com%2Feleven252412%2Fcmcc-app-checkin-quanx%2Fmain%2Fquanx-import.conf&tag=%E7%A7%BB%E5%8A%A8%E8%90%A5%E4%B8%9A%E5%8E%85%E7%AD%BE%E5%88%B0&img-url=https%3A%2F%2Fraw.githubusercontent.com%2Fgithub%2Fexplore%2Fmain%2Ftopics%2Fquantumult-x%2Fquantumult-x.png
+quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent.com%2Feleven252412%2Fcmcc-app-checkin-quanx%2Fmain%2Fquanx-import-v20260429.conf&tag=%E7%A7%BB%E5%8A%A8%E8%90%A5%E4%B8%9A%E5%8E%85%E7%AD%BE%E5%88%B0&img-url=https%3A%2F%2Fraw.githubusercontent.com%2Fgithub%2Fexplore%2Fmain%2Ftopics%2Fquantumult-x%2Fquantumult-x.png
 ```
 
 ## QuanX 配置
