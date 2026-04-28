@@ -348,20 +348,26 @@ function parseUserLine(body) {
   if (!data.nickName && !data.activityId) return '';
   return `账号：${data.nickName || '未知'}｜activityId：${data.activityId || '未知'}`;
 }
-function parseMarkLine(body) {
+function parseMarkCount(body) {
   const obj = safeJsonParse(body, null);
   const data = obj && obj.data || {};
   const user = data.userinfo || {};
+  return user.accumulateTimes !== undefined ? user.accumulateTimes : '';
+}
+function parseMarkLine(body) {
+  const obj = safeJsonParse(body, null);
+  const data = obj && obj.data || {};
   const today = todayYYYYMMDD();
   const hit = Array.isArray(data.markstatus) ? data.markstatus.find(x => x.date === today) : null;
+  const count = parseMarkCount(body);
   const parts = [];
   if (hit) parts.push(`今日状态=${hit.status}`);
-  if (user.accumulateTimes !== undefined) parts.push(`累计=${user.accumulateTimes}`);
+  if (count !== '') parts.push(`当月签到次数=${count}`);
   return parts.length ? parts.join('｜') : extractShort(body);
 }
 
-function buildMinimalSuccessText() {
-  return '签到成功 | 今日获取未知积分 | 总积分未知';
+function buildMinimalSuccessText(monthSignCount) {
+  return `签到成功 | 当月签到次数${monthSignCount !== '' && monthSignCount !== undefined ? monthSignCount : '未知'}`;
 }
 
 async function runTask() {
@@ -400,9 +406,11 @@ async function runTask() {
     lines.push(`❌ domark 失败：${e.message || e}`);
   }
 
+  let monthSignCount = '';
   try {
     const statusResp = await fetchWithSession(session, CONFIG.markStatusPath, {});
     const statusCls = classify(statusResp.body);
+    monthSignCount = parseMarkCount(statusResp.body);
     lines.push(`${iconForStatus(statusCls)} markstatus：HTTP ${statusResp.statusCode}｜${parseMarkLine(statusResp.body)}`);
   } catch (e) {
     lines.push(`⚠️ markstatus 失败：${e.message || e}`);
@@ -411,7 +419,7 @@ async function runTask() {
   const body = lines.join('\n');
   writeJSON(CONFIG.resultKey, { at: new Date().toISOString(), lines });
   const ok = lines.some(x => x.includes('domark') && (x.includes('code=SUCCESS') || x.includes('HAVE_MARKED') || x.includes('已签到') || x.includes('无法再次签到')));
-  notify(ok ? '✅ 移动营业厅签到' : '⚠️ 移动营业厅签到', ok ? '签到成功' : '结果需确认', ok ? buildMinimalSuccessText() : body);
+  notify(ok ? '✅ 移动营业厅签到' : '⚠️ 移动营业厅签到', ok ? '签到成功' : '结果需确认', ok ? buildMinimalSuccessText(monthSignCount) : body);
   return done();
 }
 
