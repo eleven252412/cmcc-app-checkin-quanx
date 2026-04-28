@@ -94,15 +94,23 @@ function mergeSetCookie(cookie, setCookie) {
   }
   return stringifyCookie(jar);
 }
+const STABLE_COOKIE_KEYS = ['QWHD_SESSION_TOKEN', 'yx', 'jsessionid-cmcc', 'JSESSIONID', 'CMCCSSO', 'CMCCSSOD'];
 function keepUsefulCookie(cookie) {
   const jar = parseCookie(cookie);
   const keep = new Map();
-  for (const key of ['QWHD_SESSION_TOKEN', 'yx', 'jsessionid-cmcc', 'JSESSIONID', 'CMCCSSO', 'CMCCSSOD']) {
+  for (const key of STABLE_COOKIE_KEYS) {
     if (jar.has(key)) keep.set(key, jar.get(key));
   }
-  // gdp/gio cookie 非签到必需，但保留可以更贴近原请求；不影响公开安全，因为只存在 QuanX 本地。
-  for (const [k, v] of jar.entries()) if (/gdp|gio/i.test(k)) keep.set(k, v);
+  // gdp/gio 属于埋点 cookie，移动 APP 每次打开都会轮换；不再保存，避免覆盖有效会话并反复弹“变化/消失”。
   return stringifyCookie(keep);
+}
+function mergeRequestCookie(prevCookie, incomingCookie) {
+  const base = parseCookie(prevCookie);
+  const incoming = parseCookie(incomingCookie);
+  for (const key of STABLE_COOKIE_KEYS) {
+    if (incoming.has(key)) base.set(key, incoming.get(key));
+  }
+  return keepUsefulCookie(stringifyCookie(base));
 }
 function hasUsefulToken(cookie, referer) {
   return String(cookie || '').includes('QWHD_SESSION_TOKEN=') || /token=QWHDSSOD/i.test(String(referer || ''));
@@ -247,18 +255,18 @@ function handleCapture() {
   if (!isQwhdPage && !isMarkApi) return done({});
 
   const rawCookie = getHeader(req.headers || {}, 'Cookie') || '';
-  const usefulCookie = keepUsefulCookie(rawCookie);
   const referer = getHeader(req.headers || {}, 'Referer') || req.url || '';
+  const prevSession = readJSON(CONFIG.sessionKey, null);
+  const usefulCookie = mergeRequestCookie(prevSession && prevSession.cookie || '', rawCookie);
   const hasToken = hasUsefulToken(usefulCookie, referer);
   if (!hasToken) return done({});
 
-  const prevSession = readJSON(CONFIG.sessionKey, null);
   const session = {
     sourcePath: url.pathname,
     url: req.url,
     method: req.method || 'GET',
     headers: sanitizeHeaders(req.headers || {}),
-    cookie: usefulCookie || rawCookie,
+    cookie: usefulCookie || keepUsefulCookie(rawCookie),
     referer
   };
   if (session.cookie) setHeader(session.headers, 'Cookie', session.cookie);

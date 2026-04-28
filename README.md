@@ -40,6 +40,7 @@ Content-Type: application/json;charset=UTF-8
    - 必要请求头
    - 最近 10 次 Cookie 快照摘要（只存名称、长度、短 hash，不存明文到通知里），方便对比今天/昨天变化
    - 响应头里的 `Set-Cookie`，用于保存服务端轮换后的最新 `QWHD_SESSION_TOKEN`
+   - 不再保存 `gdp/gio` 埋点 Cookie；它们每次打开 APP 都会轮换，保存反而会制造无效变化提示
 2. 定时模式：每天自动执行：
    - 先访问已保存的 `qwhdmark` 页面，尝试用页面 token 刷新 `QWHD_SESSION_TOKEN`
    - `user/info` 验证登录态
@@ -108,4 +109,5 @@ hostname = wx.10086.cn
 - 公开版不包含任何 Cookie / token。
 - 这个脚本只做移动营业厅 `wx.10086.cn/qwhdhub` 的日历签到，不处理云盘云朵脚本。
 - 已保留 `jsessionid-cmcc` / `JSESSIONID` 等同域辅助 Cookie，并在定时前先刷新活动页会话，尽量避免 `QWHD_SESSION_TOKEN` 每天轮换导致定时直接失效。
+- 已过滤 `gdp/gio` 埋点 Cookie；这些 Cookie 每次打开 APP 都可能变化，不代表登录态变化。
 - 如果页面 token 本身也被服务端吊销，仍需重新打开中国移动 APP 签到页刷新一次。
