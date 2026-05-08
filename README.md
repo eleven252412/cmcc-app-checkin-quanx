@@ -58,7 +58,7 @@ https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/quanx
 脚本 raw：
 
 ```text
-https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
+https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260508-no-volatile-x-headers
 ```
 
 真正一键导入（新版，避开旧缓存）：
@@ -71,11 +71,11 @@ quantumult-x:///add-resource?remote-resource=https%3A%2F%2Fraw.githubusercontent
 
 ```ini
 [rewrite_local]
-^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
-^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-response-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-request-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260508-no-volatile-x-headers
+^https?:\/\/wx\.10086\.cn\/qwhdhub\/(qwhdmark\/.*|api\/mark\/.*) url script-response-header https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260508-no-volatile-x-headers
 
 [task_local]
-30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260429-monthcount, tag=移动营业厅签到, enabled=true
+30 8 * * * https://raw.githubusercontent.com/eleven252412/cmcc-app-checkin-quanx/main/cmcc-app-checkin-quanx.js?v=20260508-no-volatile-x-headers, tag=移动营业厅签到, enabled=true
 
 [mitm]
 hostname = wx.10086.cn
@@ -101,7 +101,8 @@ hostname = wx.10086.cn
 - 移动营业厅当前 `markstatus.userinfo.accumulateTimes` 实际表示当月累计签到次数，不是积分
 - 脚本链接已追加版本参数，用于避开 QuanX/Raw 缓存；如果仍显示旧文案，请删除旧资源后重新导入
 - 抓包保存时会显示 `Cookie对比：变化/新增/消失`，用于看今天和昨天具体哪些 Cookie 变了；若看到 `已刷新 QWHD 响应会话`，表示已保存响应 `Set-Cookie` 里的新会话
-- ❌ 登录态失效：脚本会先自动尝试页面会话刷新；仍失败时再重新打开 APP 签到页抓会话
+- 2026-05-08 起不再复用 APP 动态生成的 `x-sign` / `x-time` / `x-nonce` / `x-token` 等临时签名头，避免隔天定时继续带旧签名导致“会话过期/鉴权失败”
+- 如果响应头里出现新的 `Location: /qwhdmark/...?...token=QWHDSSOD...`，脚本会同步保存成新的活动页 token URL，后续定时优先用新 token 刷会话
 - ⚠️ 结果需确认：接口返回未知状态，需查看通知详情
 - 签到失败、登录失效、接口异常时才保留详细诊断信息
 
@@ -111,4 +112,13 @@ hostname = wx.10086.cn
 - 这个脚本只做移动营业厅 `wx.10086.cn/qwhdhub` 的日历签到，不处理云盘云朵脚本。
 - 已保留 `jsessionid-cmcc` / `JSESSIONID` 等同域辅助 Cookie，并在定时前先刷新活动页会话，尽量避免 `QWHD_SESSION_TOKEN` 每天轮换导致定时直接失效。
 - 已过滤 `gdp/gio` 埋点 Cookie；这些 Cookie 每次打开 APP 都可能变化，不代表登录态变化。
+- 2026-05-08 起定时请求不再复用 APP 临时生成的 `x-sign` / `x-time` / `x-nonce` / `x-token` 等签名头，避免把昨天的动态签名带到今天导致误判成会话过期。
+- 如果响应里返回新的 token 页面跳转 `Location`，脚本会自动保存新的 `qwhdmark` token URL，减少旧页面 token 失效后的手动刷新频率。
 - 如果页面 token 本身也被服务端吊销，仍需重新打开中国移动 APP 签到页刷新一次。
+
+## 更新记录
+
+### 2026-05-08 18:03:24 CST
+- 修复移动营业厅定时请求会复用 APP 动态签名头的问题；现在不再带昨天抓到的 `x-sign` / `x-time` / `x-nonce` / `x-token` 去跑今天的签到，降低“会话过期”误报概率。
+- 响应抓包新增保存 `Location` 里的最新 `qwhdmark?...token=QWHDSSOD...` 页面 URL，后续定时优先用新 token 刷会话。
+- 更新 `quanx-import.conf` / `quanx-import-v20260429.conf` 脚本版本参数，避免 QuanX/Raw 缓存继续拉旧脚本。

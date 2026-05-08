@@ -120,11 +120,13 @@ function sanitizeHeaders(headers) {
   const keep = ['accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin', 'login-check', 'x-requested-with'];
   for (const [k, v] of Object.entries(headers || {})) {
     const lk = k.toLowerCase();
-    if (keep.includes(lk) || lk.startsWith('x-')) out[k] = v;
+    if (keep.includes(lk)) out[k] = v;
   }
   deleteHeader(out, 'host');
   deleteHeader(out, 'content-length');
   deleteHeader(out, 'accept-encoding');
+  // 不复用 APP 临时生成的 x-sign/x-time/x-nonce/x-token 等签名头；
+  // 这些头通常是一次性或短时效，隔天复用时更容易触发“会话过期/鉴权失败”。
   if (!getHeader(out, 'User-Agent')) out['User-Agent'] = CONFIG.defaultUA;
   if (!getHeader(out, 'Accept')) out['Accept'] = '*/*';
   if (!getHeader(out, 'Content-Type')) out['Content-Type'] = 'application/json;charset=UTF-8';
@@ -246,6 +248,22 @@ async function refreshPageSession(session) {
   return { ok: true, statusCode: resp.statusCode, body: resp.body || '' };
 }
 
+function saveRedirectTokenUrl(session, headers) {
+  const location = getHeader(headers || {}, 'location');
+  if (!location) return false;
+  try {
+    const absolute = new URL(location, `https://${CONFIG.host}`).toString();
+    const u = new URL(absolute);
+    if (u.host === CONFIG.host && u.pathname.startsWith(CONFIG.pagePathPrefix) && /token=QWHDSSOD/i.test(u.search)) {
+      session.url = absolute;
+      session.referer = absolute;
+      if (session.headers) setHeader(session.headers, 'Referer', absolute);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 function handleCapture() {
   const req = $request;
   const url = new URL(req.url || '');
@@ -310,6 +328,7 @@ function handleResponseCapture() {
   session.headers = sanitizeHeaders(Object.assign({}, session.headers || {}, req.headers || {}));
   session.cookie = mergedCookie;
   session.referer = referer || session.referer || req.url;
+  saveRedirectTokenUrl(session, resp.headers || {});
   setHeader(session.headers, 'Cookie', session.cookie);
   const diff = saveSession(session, { cookie: baseCookie || '' });
 
