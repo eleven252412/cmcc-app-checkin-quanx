@@ -95,20 +95,27 @@ function mergeSetCookie(cookie, setCookie) {
   return stringifyCookie(jar);
 }
 const STABLE_COOKIE_KEYS = ['QWHD_SESSION_TOKEN', 'yx', 'jsessionid-cmcc', 'JSESSIONID', 'CMCCSSO', 'CMCCSSOD'];
+function isAuxiliaryCookieKey(key) {
+  return /gdp|gio/i.test(String(key || ''));
+}
 function keepUsefulCookie(cookie) {
   const jar = parseCookie(cookie);
   const keep = new Map();
   for (const key of STABLE_COOKIE_KEYS) {
     if (jar.has(key)) keep.set(key, jar.get(key));
   }
-  // gdp/gio 属于埋点 cookie，移动 APP 每次打开都会轮换；不再保存，避免覆盖有效会话并反复弹“变化/消失”。
+  // 部分 qwhdhub 请求除了稳定登录 cookie，还会依赖同域辅助 cookie；
+  // 这些值只保存在 QuanX 本地，不写入公开仓库，因此这里一并保留，优先保证登录态可复用。
+  for (const [k, v] of jar.entries()) {
+    if (isAuxiliaryCookieKey(k)) keep.set(k, v);
+  }
   return stringifyCookie(keep);
 }
 function mergeRequestCookie(prevCookie, incomingCookie) {
   const base = parseCookie(prevCookie);
   const incoming = parseCookie(incomingCookie);
-  for (const key of STABLE_COOKIE_KEYS) {
-    if (incoming.has(key)) base.set(key, incoming.get(key));
+  for (const [k, v] of incoming.entries()) {
+    if (STABLE_COOKIE_KEYS.includes(k) || isAuxiliaryCookieKey(k)) base.set(k, v);
   }
   return keepUsefulCookie(stringifyCookie(base));
 }
@@ -117,7 +124,10 @@ function hasUsefulToken(cookie, referer) {
 }
 function sanitizeHeaders(headers) {
   const out = {};
-  const keep = ['accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin', 'login-check', 'x-requested-with'];
+  const keep = [
+    'accept', 'accept-language', 'content-type', 'user-agent', 'referer', 'origin',
+    'login-check', 'x-requested-with', 'authorization', 'channel', 'xs', 'x-qen', 'x-app-version'
+  ];
   for (const [k, v] of Object.entries(headers || {})) {
     const lk = k.toLowerCase();
     if (keep.includes(lk)) out[k] = v;
@@ -125,8 +135,8 @@ function sanitizeHeaders(headers) {
   deleteHeader(out, 'host');
   deleteHeader(out, 'content-length');
   deleteHeader(out, 'accept-encoding');
-  // 不复用 APP 临时生成的 x-sign/x-time/x-nonce/x-token 等签名头；
-  // 这些头通常是一次性或短时效，隔天复用时更容易触发“会话过期/鉴权失败”。
+  // 不复用 APP 临时生成的 x-sign/x-time/x-nonce/x-token/x-request-id/x-timestamp 等签名头；
+  // 但保留相对稳定的 app 上下文头（如 channel/xs/x-qen/x-app-version），避免服务端把请求当成缺少客户端上下文。
   if (!getHeader(out, 'User-Agent')) out['User-Agent'] = CONFIG.defaultUA;
   if (!getHeader(out, 'Accept')) out['Accept'] = '*/*';
   if (!getHeader(out, 'Content-Type')) out['Content-Type'] = 'application/json;charset=UTF-8';
